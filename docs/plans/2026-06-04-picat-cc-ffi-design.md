@@ -64,6 +64,36 @@ Picat source: `/Users/robertwendt/Picat` (C engine in `emu/`, stdlib in
 
 Runs `main` (or `goal`), captures stdout. For print-style programs and debugging.
 
+### The `fs` option — mounting CC storage into Picat (added 2026-06-05)
+
+`opts.fs = "<dir>"` names a directory **inside the calling computer's own CC
+filesystem** (created if absent). The mod resolves it to the computer's real
+save directory (`<world>/computercraft/computer/<id>/<dir>`) and mounts it
+read-write at **`/data`** in the WASM guest. Motivating case: the `nn` module
+(FANN) — train a network, `nn_save('/data/xor.net')`, and the model persists
+on the computer's disk where both Lua (`fs.*`) and later Picat calls see it.
+
+```lua
+-- train once; model lands on the turtle's own disk
+picat.query(prog, "train_and_save('/data/xor.net')", {}, {fs = "models"})
+-- later call loads it back
+picat.query(prog2, "predict('/data/xor.net', In, Out)", {"Out"}, {fs = "models"})
+```
+
+Security invariants:
+- The Lua value is a CC-sandbox path, never a host path. Resolution rejects
+  absolute paths, `..` segments, and anything that escapes the computer's own
+  save dir after normalization.
+- Only the computer's own root storage for v1 — no `/rom`, no floppy `/disk`
+  mounts (YAGNI; revisit if turtles need to carry models between computers).
+- Engine layer (`PicatRunner`/`PicatService`) takes a real `java.nio.Path` for
+  the mount — path *resolution and validation* is mod-layer responsibility,
+  keeping the engine testable with plain temp dirs.
+
+Caveats (accepted): WASI writes bypass CC's disk-quota accounting, and a
+concurrent Lua `fs.write` to the same file during a solve is last-writer-wins
+— same as two Lua programs racing today.
+
 ### Example: quarry turtle
 
 Add one predicate to `turtle_quarry.pi` (planner code unchanged):

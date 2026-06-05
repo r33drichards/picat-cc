@@ -1255,6 +1255,35 @@ further before blaming the engine.
 
 ---
 
+### Task 11b: `/data` host mounts (added 2026-06-05 per user requirement)
+
+**Requirement:** Picat programs (esp. the `nn`/FANN module) must read/write
+persistent files. Design (see design doc "The `fs` option"): Lua passes
+`opts.fs = "<dir>"` — a path inside the calling computer's CC sandbox; the mod
+resolves it to the computer's host save dir and the engine mounts it at
+`/data` in the guest.
+
+**Engine side (TDD):**
+- `PicatRunner.runRaw` gains an optional `Path dataDir` parameter (nullable);
+  when present, adds `.withDirectory("/data", dataDir)` to WasiOptions.
+- `PicatService.query/eval` opts gain `"fsPath"` (a `java.nio.Path`, set by
+  the mod layer, never by Lua directly).
+- Tests (JUnit `@TempDir` real dirs — jimfs not needed here):
+  1. Picat writes `/data/out.txt` → file appears in the temp dir.
+  2. Pre-existing file in temp dir readable from Picat (`read_file_to_string`).
+  3. nn round-trip if feasible: train tiny XOR net, `nn_save('/data/xor.net')`,
+     fresh call loads it and predicts. If the nn module turns out broken under
+     WASM (FANN was compiled in but never exercised), characterize and report
+     — file the finding, don't block the mount feature on FANN.
+- No `fs` opt → no `/data` mount (Picat sees ENOENT; test pins that isolation
+  default).
+
+**Mod side (folds into Task 13):** resolve `opts.fs` → host path:
+computer save dir (via CC API / server save path + computer ID) + the given
+relative dir; reject absolute paths and any `..` after normalization
+(`resolved.normalize().startsWith(computerRoot)`); create the dir; pass as
+`fsPath`. Document quota-bypass caveat in README (Task 16).
+
 ## Phase 3: The Fabric mod
 
 ### Task 12: Mod skeleton
