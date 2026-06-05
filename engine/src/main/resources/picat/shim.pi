@@ -105,9 +105,9 @@ compile_goal(Names) =>
 %% --- request plumbing ------------------------------------------------------
 
 % Unify each ('Name', Value) binding with the goal arg of that name.
-% Name arrives from request.pi's bind_list() as a quoted atom ('Xs'), but a
-% caller could also pass a string; to_atom/1 throws string_expected on an atom
-% (probed), so only convert when it is actually a string.
+% Names arrive as atoms from request.pi's bind_list() ('Xs'); to_atom/1 throws
+% string_expected on an atom (probed), so as_atom/1 only converts strings. The
+% string clause is defensive — request.pi always quotes atoms.
 bind_all([], _NameArgs) => true.
 bind_all([(Name, Value) | Rest], NameArgs) =>
     Var = lookup_arg(as_atom(Name), NameArgs),

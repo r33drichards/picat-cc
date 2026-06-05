@@ -179,4 +179,23 @@ class ShimTest {
         var resp = run("this is !!! not picat", "true", List.of(), 1, "[]");
         assertEquals("error", resp.get("status"));
     }
+
+    @Test void negativeIntegers() {
+        var resp = run("", "X = -7", List.of("X"), 1, "[]");
+        assertEquals(-7.0, firstSol(resp).get("X"));
+    }
+
+    @Test void negativeFloats() {
+        var resp = run("", "X = -2.5", List.of("X"), 1, "[]");
+        assertEquals(-2.5, firstSol(resp).get("X"));
+    }
+
+    @Test void bigintLosesPrecisionAsDocumented() {
+        // Picat emits the exact integer 2**60 as a bare JSON number; Gson parses
+        // every bare number to a Double, so it round-trips as the (lossy) double
+        // without throwing and the JSON stays parseable. Pins the documented
+        // contract that numbers cross the boundary as doubles.
+        var resp = run("", "X = 2**60", List.of("X"), 1, "[]");
+        assertEquals(Math.pow(2, 60), (Double) firstSol(resp).get("X"), 0.0);
+    }
 }
