@@ -1,7 +1,7 @@
 # picat-cc: Picat FFI for ComputerCraft
 
 **Date:** 2026-06-04
-**Status:** Design validated, not yet implemented
+**Status:** Implemented through v0.1.0 — engine complete and tested (~67 JUnit tests, real WASM per test); mod builds against CC:Tweaked 1.116.1 / MC 1.21.8 (jar-in-jar verified); in-game acceptance pending (see docs/acceptance.md).
 **Revised 2026-06-04** after toolchain research (see "Research corrections" at bottom): wasi-sdk replaces Emscripten; Chicory has no timeout mechanism so the timeout design changed; the request channel uses generated Picat literals instead of JSON.
 
 ## Goal
