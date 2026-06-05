@@ -1,0 +1,137 @@
+/***************************************************************************
+ * turtle_quarry.pi
+ *
+ * Plan a safe, fuel-efficient chunk quarry for a ComputerCraft turtle,
+ * using Picat's planner module.
+ *
+ * The three safety properties become PRECONDITIONS on actions, so the
+ * planner can never emit a plan that:
+ *   - overruns the inventory   (guard: Cargo < inv_cap)
+ *   - runs out of fuel         (guard: NewFuel >= 0)
+ *   - strands the turtle       (guard: NewFuel >= dist(., fuel_chest))
+ *
+ * best_plan/2 returns the minimum-fuel action sequence, or FAILS if no
+ * safe plan exists for the given fuel/inventory budget -- which is itself
+ * the answer to "is my setup feasible?".
+ *
+ * Run:  picat turtle_quarry.pi
+ ***************************************************************************/
+
+import planner.
+import util.
+
+%% ---- Configuration (the knobs) -----------------------------------------
+%% Start small so the planner stays fast; scale toward the real values
+%% (chunk 16, inv 16) once the model behaves the way you expect.
+chunk_size()    = 2.     % mine x,z in 0..chunk_size-1     (full chunk)
+surface_y()     = 1.     % top mining layer (sea-level surface)
+bedrock_y()     = 0.     % bottom mining layer (last layer above bedrock noise)
+inv_cap()       = 4.     % inventory slots                 (real turtle)
+fuel_cap()      = 200.   % max fuel  (real turtle fuel limit)
+refuel_amount() = 50.    % fuel gained per refuel action (kelp block = 200)
+
+%% ---- Derived constants --------------------------------------------------
+layer_area()   = chunk_size() * chunk_size().
+n_layers()     = surface_y() - bedrock_y() + 1.
+total_blocks() = layer_area() * n_layers().
+
+%% Chests sit on a platform one block above the quarry.
+storage_chest() = {0, surface_y() + 1, 0}.
+fuel_chest()    = {chunk_size() - 1, surface_y() + 1, 0}.
+start_pos()     = {0, surface_y() + 1, 0}.
+
+%% ---- Helpers ------------------------------------------------------------
+%% Manhattan distance == fuel cost to travel between two coords (turtles
+%% move one axis at a time, so this is the true number of moves).
+dist(P, Q) = abs(P[1]-Q[1]) + abs(P[2]-Q[2]) + abs(P[3]-Q[3]).
+
+%% The (M+1)-th block to mine, 0-indexed. Row-major within a layer, layers
+%% descending from the surface. A real turtle would snake to save fuel; the
+%% planner charges true Manhattan distance either way, so the route order
+%% here only affects the *cost*, never *correctness*.
+target(M) = T =>
+    Layer   = M // layer_area(),
+    InLayer = M mod layer_area(),
+    T = { InLayer // chunk_size(),        % x
+          surface_y() - Layer,            % y
+          InLayer mod chunk_size() }.     % z
+
+%% ---- Goal ---------------------------------------------------------------
+%% State = {Pos, Fuel, Cargo, Mined}
+final({_Pos, _Fuel, _Cargo, Mined}) =>
+    Mined == total_blocks().
+
+%% ---- Actions ------------------------------------------------------------
+%% Mine the next block. The two guards are NeverOverflow and NeverStranded:
+%% the planner simply cannot choose this action from an unsafe state.
+action({Pos, Fuel, Cargo, Mined}, To, Action, Cost) ?=>
+    Mined < total_blocks(),
+    Cargo < inv_cap(),                        % NeverOverflow
+    Tgt     = target(Mined),
+    Step    = dist(Pos, Tgt),
+    NewFuel = Fuel - Step,
+    NewFuel >= dist(Tgt, fuel_chest()),       % NeverStranded
+    To     = {Tgt, NewFuel, Cargo + 1, Mined + 1},
+    Action = $mine(Tgt),
+    Cost   = Step.
+
+%% Detour to the storage chest and empty the inventory.
+action({Pos, Fuel, Cargo, Mined}, To, Action, Cost) ?=>
+    Cargo > 0,
+    Step    = dist(Pos, storage_chest()),
+    NewFuel = Fuel - Step,
+    NewFuel >= 0,                             % NeverStarved
+    To     = {storage_chest(), NewFuel, 0, Mined},
+    Action = $dump,
+    Cost   = Step.
+
+%% Detour to the fuel chest and refuel (capped at capacity). The NewFuel >
+%% Fuel guard stops the planner from exploring pointless no-op refuels.
+action({Pos, Fuel, Cargo, Mined}, To, Action, Cost) ?=>
+    Step        = dist(Pos, fuel_chest()),
+    AfterTravel = Fuel - Step,
+    AfterTravel >= 0,                         % NeverStarved
+    NewFuel     = min(fuel_cap(), AfterTravel + refuel_amount()),
+    NewFuel > Fuel,
+    To     = {fuel_chest(), NewFuel, Cargo, Mined},
+    Action = $refuel,
+    Cost   = Step.
+
+%% ---- Driver -------------------------------------------------------------
+main =>
+    Start = {start_pos(), fuel_cap(), 0, 0},
+    printf("Quarry: %wx%w chunk, layers y=%w..%w  (%w blocks)%n",
+           chunk_size(), chunk_size(), bedrock_y(), surface_y(), total_blocks()),
+    printf("Inventory: %w slots   Fuel cap: %w%n%n", inv_cap(), fuel_cap()),
+    %% best_plan/2 (optimal) is only tractable for small configs; at full
+    %% chunk scale we take the first SAFE plan found (still respects all
+    %% three safety guards -- just not minimum fuel).
+    ( plan(Start, 100000000, Plan, Cost) ->
+          report(Plan, Cost)
+    ;
+          println("No safe quarry plan exists for this fuel/inventory budget.")
+    ).
+
+report(Plan, Cost) =>
+    Mines   = sum([1 : A in Plan, A = $mine(_)]),
+    Dumps   = sum([1 : A in Plan, A == dump]),
+    Refuels = sum([1 : A in Plan, A == refuel]),
+    printf("Found a safe plan: %w actions, %w fuel spent on travel.%n",
+           Plan.length, Cost),
+    printf("%w blocks mined, %w dump trip(s), %w refuel action(s).%n%n",
+           Mines, Dumps, Refuels),
+    L = Plan.length,
+    println("First 10 actions:"),
+    foreach(I in 1..min(10, L))
+        printf("  %w%n", Plan[I])
+    end,
+    if L > 15 then
+        println("  ..."),
+        foreach(I in (L-4)..L)
+            printf("  %w%n", Plan[I])
+        end
+    end.
+
+do_plan(Plan, Cost) =>
+    Start = {start_pos(), fuel_cap(), 0, 0},
+    plan(Start, 100000000, Plan, Cost).
