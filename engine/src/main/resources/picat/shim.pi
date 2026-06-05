@@ -55,7 +55,12 @@ main =>
 
 run_request() =>
     cl("/work/user.pi"),
-    parse_term(goal_str(), _Goal, VarMap),
+    % parse_term parses a single term; a goal with a top-level comma
+    % conjunction ("X = 1, Y = two") is rejected unless parenthesized
+    % (probed: bare comma => syntax_error, "(...)" parses to ','/2). Wrap in
+    % parens for discovery only; the goal is spliced verbatim into the
+    % compiled body (compile_goal), where conjunctions are already legal.
+    parse_term("(" ++ goal_str() ++ ")", _Goal, VarMap),
     Names = keys(VarMap),                         % atoms: every var in the goal
     compile_goal(Names),
     NArgs = length(Names),
@@ -100,11 +105,17 @@ compile_goal(Names) =>
 %% --- request plumbing ------------------------------------------------------
 
 % Unify each ('Name', Value) binding with the goal arg of that name.
+% Name arrives from request.pi's bind_list() as a quoted atom ('Xs'), but a
+% caller could also pass a string; to_atom/1 throws string_expected on an atom
+% (probed), so only convert when it is actually a string.
 bind_all([], _NameArgs) => true.
 bind_all([(Name, Value) | Rest], NameArgs) =>
-    Var = lookup_arg(to_atom(Name), NameArgs),
+    Var = lookup_arg(as_atom(Name), NameArgs),
     Var = Value,
     bind_all(Rest, NameArgs).
+
+as_atom(N) = to_atom(N), string(N) => true.
+as_atom(N) = N => true.
 
 lookup_arg(Name, NameArgs) = Var =>
     ( member({N, V}, NameArgs), N == Name ->
