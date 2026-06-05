@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "picat-cc",
+  "version": "0.1.0",
+  "name": "Picat for ComputerCraft",
+  "description": "Embeds the Picat logic-programming engine; every CC computer gets a `picat` global.",
+  "license": "MPL-2.0",
+  "environment": "*",
+  "entrypoints": { "main": ["cc.picat.mod.PicatCcMod"] },
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "minecraft": "~1.21.8",
+    "computercraft": "*"
+  }
+}
