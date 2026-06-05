@@ -1,12 +1,12 @@
 package cc.picat.engine;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -89,7 +89,7 @@ public final class PicatService {
     }
 
     private final ExecutorService pool;
-    private final ScheduledExecutorService timer;
+    private final ScheduledThreadPoolExecutor timer;
     private final int maxAbandoned;
     private final long maxTimeoutMs;
     private final AtomicInteger abandoned = new AtomicInteger(0);
@@ -112,11 +112,16 @@ public final class PicatService {
             }
         };
         this.pool = Executors.newFixedThreadPool(threads, workerFactory);
-        this.timer = Executors.newSingleThreadScheduledExecutor(r -> {
+        // setRemoveOnCancelPolicy purges cancelled timeout tasks from the queue
+        // immediately rather than leaving tombstones until their delay elapses,
+        // so the common worker-wins path does not accumulate dead scheduled
+        // tasks for the full timeout duration.
+        this.timer = new ScheduledThreadPoolExecutor(1, r -> {
             Thread t = new Thread(r, "picat-timeout");
             t.setDaemon(true);
             return t;
         });
+        this.timer.setRemoveOnCancelPolicy(true);
     }
 
     public int abandonedCount() {
@@ -131,6 +136,13 @@ public final class PicatService {
     /**
      * Run a goal against a user program, capturing the named goal variables for
      * up to {@code max} solutions.
+     *
+     * <p><b>Completion thread:</b> the returned future may be completed on an
+     * internal engine thread — a worker thread on the normal path, or the
+     * scheduler thread ({@code picat-timeout}) on the timeout path. Consumers
+     * must keep {@code whenComplete}/{@code thenApply} bodies cheap, or use the
+     * {@code *Async} variants, to avoid blocking the timeout scheduler (which is
+     * shared by every in-flight job).
      *
      * @param prog user Picat source (becomes /work/user.pi; may be empty)
      * @param goal goal text WITHOUT a trailing '.' terminator
@@ -162,6 +174,14 @@ public final class PicatService {
     /**
      * Run a self-contained program for its stdout (a {@code main}-style driver).
      * Wraps {@code prog} with a driver predicate so output is captured exactly.
+     *
+     * <p>Always runs with the default (capped) timeout — there is no opts map,
+     * so no per-call timeout, max, or bind. Use {@link #query} when you need
+     * those.
+     *
+     * <p><b>Completion thread:</b> same contract as {@link #query} — the future
+     * may complete on an internal worker or the timeout-scheduler thread; keep
+     * continuation bodies cheap or use the {@code *Async} variants.
      *
      * @param prog user Picat source defining the entry point
      * @param goal entry goal text (without trailing '.'); null/blank ⇒ "main"
@@ -202,6 +222,14 @@ public final class PicatService {
 
         CompletableFuture<Result> publicFuture = new CompletableFuture<>();
         AtomicBoolean settled = new AtomicBoolean(false);
+        // Forward-reference cell for the timeout task: the whenComplete hook
+        // (registered below) needs to cancel it, but it is scheduled after the
+        // hook is attached. Single-element array gives the closure a mutable
+        // slot. A benign race exists where the worker finishes and runs the
+        // hook before the schedule call populates the cell (handle still null);
+        // then we skip cancel and the timeout task fires once, sees settled
+        // already true, and is a no-op — harmless.
+        final ScheduledFuture<?>[] timeoutHandle = new ScheduledFuture<?>[1];
 
         // The worker future: runs the blocking WASM call, maps the outcome.
         CompletableFuture<Result> worker = CompletableFuture.supplyAsync(() -> {
@@ -217,7 +245,12 @@ public final class PicatService {
         // Worker completion races the timeout to settle the public future.
         worker.whenComplete((res, ex) -> {
             if (settled.compareAndSet(false, true)) {
-                // Worker won the race: complete normally, abandoned untouched.
+                // Worker won the race: cancel the now-moot timeout task so it
+                // does not linger in the scheduler queue, then complete
+                // normally (abandoned untouched). cancel(false): never
+                // interrupt — the task may already be running and is a no-op.
+                ScheduledFuture<?> h = timeoutHandle[0];
+                if (h != null) h.cancel(false);
                 if (ex != null) {
                     publicFuture.complete(Result.err(mapRuntime(ex)));
                 } else {
@@ -231,7 +264,7 @@ public final class PicatService {
         });
 
         // Timeout: if it wins the CAS, the worker is still running -> abandon.
-        timer.schedule(() -> {
+        timeoutHandle[0] = timer.schedule(() -> {
             if (settled.compareAndSet(false, true)) {
                 abandoned.incrementAndGet();
                 publicFuture.complete(Result.err("timeout"));
@@ -295,6 +328,9 @@ public final class PicatService {
             if (!first) bindList.append(',');
             first = false;
             // ('Name', <literal>) — the name is a quoted atom, the value a term.
+            // We can splice `name` between single quotes WITHOUT escaping ONLY
+            // because requireVarName ran just above: it constrains name to
+            // [A-Z_][A-Za-z0-9_]*, which contains no quote/backslash chars.
             bindList.append("('").append(name).append("', ")
                     .append(PicatLiterals.toLiteral(e.getValue())).append(')');
         }
@@ -332,8 +368,35 @@ public final class PicatService {
 
     // --- response interpretation -------------------------------------------
 
-    @SuppressWarnings("unchecked")
+    /** Maps the {@code "ok"} status of a parsed response to a success Result.
+     *  The two callers differ only here — query reads solutions, eval reads
+     *  stdout — so the rest of the taxonomy lives in {@link #interpret}. */
+    @FunctionalInterface
+    private interface OkMapper {
+        Result apply(Map<String, Object> resp, PicatRunner.RawResult raw);
+    }
+
     private static Result interpretQuery(PicatRunner.RawResult raw) {
+        return interpret(raw, PicatService::okQuery);
+    }
+
+    private static Result interpretEval(PicatRunner.RawResult raw) {
+        return interpret(raw, (resp, r) -> Result.okOut(r.stdout()));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Result okQuery(Map<String, Object> resp, PicatRunner.RawResult raw) {
+        Object sols = resp.get("solutions");
+        return Result.ok(sols instanceof List
+            ? (List<Map<String, Object>>) sols : List.of());
+    }
+
+    /** Single source of truth for response interpretation: the missing-response
+     *  fallback, the json parse guard, the status switch, and the error
+     *  taxonomy. Only the {@code "ok"} branch is parameterized so query and eval
+     *  cannot drift on every other outcome. */
+    @SuppressWarnings("unchecked")
+    private static Result interpret(PicatRunner.RawResult raw, OkMapper okMapper) {
         if (raw.responseJson() == null) {
             return noResponse(raw);
         }
@@ -346,33 +409,7 @@ public final class PicatService {
         }
         String status = resp == null ? null : (String) resp.get("status");
         if ("ok".equals(status)) {
-            Object sols = resp.get("solutions");
-            return Result.ok(sols instanceof List
-                ? (List<Map<String, Object>>) sols : List.of());
-        }
-        if ("failed".equals(status)) {
-            return Result.err("goal failed");
-        }
-        if ("error".equals(status)) {
-            return Result.err(mapError((String) resp.get("message"), raw.stderr()));
-        }
-        return Result.err("internal: unknown status " + status);
-    }
-
-    private static Result interpretEval(PicatRunner.RawResult raw) {
-        if (raw.responseJson() == null) {
-            return noResponse(raw);
-        }
-        Map<?, ?> resp;
-        try {
-            resp = GSON.fromJson(raw.responseJson(), Map.class);
-        } catch (RuntimeException parse) {
-            return Result.err("internal: malformed response json: "
-                + parse.getMessage());
-        }
-        String status = resp == null ? null : (String) resp.get("status");
-        if ("ok".equals(status)) {
-            return Result.okOut(raw.stdout());
+            return okMapper.apply(resp, raw);
         }
         if ("failed".equals(status)) {
             return Result.err("goal failed");
@@ -408,8 +445,13 @@ public final class PicatService {
         return "error: " + msg;
     }
 
-    /** Map a Chicory/runtime exception escaping runRaw. OOM-ish text -> memory
-     *  limit; anything else is internal. */
+    /** Map a Chicory/runtime exception escaping runRaw. OOM detection here is
+     *  best-effort string-sniffing of the message for a Chicory-reported memory
+     *  trap; it deliberately does NOT special-case {@link OutOfMemoryError}.
+     *  A genuine JVM OutOfMemoryError is an Error (not RuntimeException), so it
+     *  arrives via the worker future's {@code ex != null} path and falls
+     *  through to {@code internal:} — acceptable, since a real heap exhaustion
+     *  is an engine fault, not a per-goal memory-limit signal. */
     private static String mapRuntime(Throwable e) {
         String m = e.getMessage();
         String lower = m == null ? "" : m.toLowerCase();
