@@ -249,8 +249,10 @@ Lua, server unaffected.
 
 Error taxonomy — every expected failure is `false, err` with a dispatchable
 prefix: `compile: <picat stderr>`, `goal failed`, `timeout`, `memory limit`,
-`bind: <bad value path>`, `internal: <trap>`. Lua exceptions only for misuse
-(wrong argument types).
+`bind: <bad value path>`, `error: <picat error>`, `busy: ...`, `internal:
+<trap>`, plus the mod-layer `fs: ...`. Lua exceptions only for misuse (wrong
+argument types). The README taxonomy table is the authoritative, complete
+list as shipped.
 
 ## Testing
 

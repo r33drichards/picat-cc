@@ -88,9 +88,10 @@ picat_test
 
 Expect each check to print `ok`, then a summary and `ALL PASS`.
 
-- [ ] `ALL PASS` (13 checks: global/version, arith, struct, atom, list,
+- [ ] `ALL PASS` (covers: global/version, arith, struct, atom, list,
       backtracking, bind, goal-failure, compile-error, eval, eval-goal,
-      planner, fs round-trip)
+      planner, fs round-trip — ~14 checks; a couple of fs sub-checks may
+      print `(skipped)`, which is benign)
 - [ ] any check that prints `(skipped)` did so for a benign reason (fs
       cross-check only) and not a real failure
 
