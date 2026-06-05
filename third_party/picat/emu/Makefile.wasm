@@ -1,0 +1,77 @@
+# Build picat.wasm with wasi-sdk (>= 24). Requires WASI_SDK_PATH.
+#
+# Cloned from Makefile.linux64 + common.mak. Differences from native:
+#   * CC/CPP point at wasi-sdk clang (target wasm32-unknown-wasi).
+#   * -DM64BITS is DELIBERATELY ABSENT: wasm32 has 32-bit pointers and
+#     Picat's basic.h supports a 32-bit (B-Prolog legacy) build.
+#   * -DPICAT_WASM gates out sockets/signals/pthread/system() dead code
+#     under WASI (see source guards: /* PICAT_WASM: ... */).
+#   * WASI emulation libs cover signal()/times()/clock so the few callers
+#     that survive the PICAT_WASM guards still link.
+#
+# === SjLj / EXCEPTION HANDLING (read this before the Chicory task) ===
+# The plan assumed Picat uses setjmp/longjmp (in toam.c) that would be
+# lowered to the Wasm EH proposal, and worried about which EH encoding
+# (legacy try/catch vs standard exnref/try_table) Chicory accepts.
+#
+# EMPIRICAL FINDING: Picat as vendored here uses NO setjmp/longjmp at all.
+# The only references are three COMMENTED-OUT lines in toam.c
+# (#include <setjmp.h>, jmp_buf restart_env, longjmp(restart_env,-1)).
+# Verified: `grep -rn 'setjmp\|longjmp'` over every built .c finds only
+# those comments; toam.o disassembles to zero EH instructions.
+#
+# CONSEQUENCE: the produced picat.wasm contains NO exception-handling
+# instructions and NO tag section. It validates with EH disabled
+# (`wasm-tools validate --features=-exceptions` passes). So the Chicory
+# task does NOT need any Wasm-EH support in the runtime. This sidesteps
+# the legacy-vs-standard-EH question entirely.
+#
+# We still pass -mllvm -wasm-enable-sjlj below (harmless no-op for this
+# code) and link -lsetjmp, so the build keeps working if a future Picat
+# release re-enables that commented-out longjmp. NOTE: if it ever does,
+# wasi-sdk 25 (LLVM 19) lowers SjLj to the *legacy* EH encoding only
+# (try=0x06/catch=0x07); there is no flag here to emit exnref/try_table
+# (the would-be `-wasm-use-legacy-eh=false` does not exist in LLVM 19).
+# At that point the Chicory task would need legacy-EH support, a newer
+# wasi-sdk, or a Binaryen --translate-to-exnref post-process.
+
+WASI_SDK_PATH ?= /opt/wasi-sdk
+CC  = $(WASI_SDK_PATH)/bin/clang
+CPP = $(WASI_SDK_PATH)/bin/clang++
+
+DEFS = -DGC -DGCC -DPICAT -DSAT -DFANN_NO_DLL -DFANN -DPICAT_WASM \
+       -Dunix -DLINUX -DPOSIX \
+       -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_PROCESS_CLOCKS
+
+# SjLj lowering. Currently a no-op (Picat uses no setjmp/longjmp); kept
+# for forward-compat. Would emit legacy Wasm EH if ever exercised.
+SJLJ = -mllvm -wasm-enable-sjlj
+
+CFLAGS = -O2 -fno-strict-aliasing $(DEFS) $(SJLJ) \
+         -Wno-error=unused-label -Wno-implicit-function-declaration
+
+LFLAGS = -lm -lsetjmp -lwasi-emulated-signal -lwasi-emulated-process-clocks \
+         -Wl,-z,stack-size=8388608 \
+         -Wl,--max-memory=268435456
+
+CCC  = $(CC) -c $(CFLAGS)
+CPPC = $(CPP) -c $(CFLAGS)
+
+# EXT must be set BEFORE the include: common.mak names the link target
+# `picat$(EXT)` and make expands $(EXT) at rule-definition time for the
+# target name.
+EXT = .wasm
+
+include common.mak
+
+# espresso and kissat carry their own -O3 flag sets in common.mak. They
+# DO NOT include $(SJLJ)/$(DEFS), but neither espresso nor kissat use
+# setjmp/longjmp (confirmed: setjmp is only in toam.c), so they need no
+# SjLj lowering. We do, however, need -DPICAT_WASM and the WASI emulation
+# defines to reach kissat (resources.c uses getrusage/times) and espresso
+# (cpu_time.c uses times()). These overrides come AFTER the include so they
+# win over common.mak's own assignments.
+ESPRESSO_FLAGS = -O2 -I. -Iespresso $(DEFS)
+KISSAT_FLAGS = -O2 -W -Wall -DNEMBEDDED -DNDEBUG -DNMETRICS -DQUIET \
+               -DNSTATISTICS -DNPROOFS $(DEFS) \
+               -Wno-implicit-function-declaration

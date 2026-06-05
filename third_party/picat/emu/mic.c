@@ -39,6 +39,9 @@
 
 #if defined(WIN32) && defined(M64BITS)
 #define sys_getpid() _getpid()
+#elif defined(PICAT_WASM)
+/* PICAT_WASM: no process model in WASI; report a fixed pid */
+#define sys_getpid() 1
 #else
 #define sys_getpid() getpid()
 #endif
@@ -821,7 +824,12 @@ int b_SYSTEM0_cf(BPLONG op1, BPLONG op2)  /* op1: a list of int (string) for CSh
         bp_exception = atom_expected; return BP_ERROR;
 #endif
     }
+#ifdef PICAT_WASM
+    /* PICAT_WASM: no command shell in WASI; report failure */
+    ASSIGN_f_atom(op2, MAKEINT(-1));
+#else
     ASSIGN_f_atom(op2, MAKEINT(system(s)));
+#endif
     return BP_TRUE;
 }
 

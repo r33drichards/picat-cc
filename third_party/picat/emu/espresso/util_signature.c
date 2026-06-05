@@ -21,12 +21,13 @@
 #include "espresso.h"
 #include "signature.h"
 #include <sys/time.h>
-#if !(defined(WIN32) && defined(__MINGW32__))
+/* PICAT_WASM: WASI has no setrlimit/RLIMIT_CPU (sys/resource.h) */
+#if !((defined(WIN32) && defined(__MINGW32__)) || defined(PICAT_WASM))
 #include <sys/resource.h>
 #endif
 #include <unistd.h>
 
-#if !(defined(WIN32) && defined(__MINGW32__))
+#if !((defined(WIN32) && defined(__MINGW32__)) || defined(PICAT_WASM))
 void
 set_time_limit(int seconds)
 {

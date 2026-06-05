@@ -1571,7 +1571,12 @@ int c_cp_file() {
     strcat(bp_buf, f_name2);
 
     CHANGE_FILE_SEPARATOR(bp_buf);
+#ifdef PICAT_WASM
+    /* PICAT_WASM: no command shell in WASI; cp via system() unavailable */
+    (void)bp_buf;
+#else
     system(bp_buf);
+#endif
     return BP_TRUE;
 }
 
