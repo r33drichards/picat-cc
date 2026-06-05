@@ -2,6 +2,7 @@ package cc.picat.engine;
 
 import com.dylibso.chicory.compiler.MachineFactoryCompiler;
 import com.dylibso.chicory.runtime.Instance;
+import com.dylibso.chicory.runtime.Machine;
 import com.dylibso.chicory.runtime.Store;
 import com.dylibso.chicory.wasi.WasiExitException;
 import com.dylibso.chicory.wasi.WasiOptions;
@@ -14,11 +15,13 @@ import com.google.common.jimfs.Jimfs;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 
 /** Runs one Picat goal in a fresh, fully isolated WASM instance. */
 public final class PicatRunner {
@@ -26,8 +29,13 @@ public final class PicatRunner {
     public record RawResult(int exitCode, String stdout, String stderr,
                             String responseJson) {}
 
-    private static final WasmModule MODULE =
-        Parser.parse(PicatRunner.class.getResourceAsStream("/picat/picat.wasm"));
+    private static final WasmModule MODULE = loadModule();
+
+    /** Compile the 5.5MB module to JVM bytecode ONCE, at class load, and reuse
+     *  the resulting machine factory across every instance. Recompiling per call
+     *  cost ~7s/call (dominating the Task 8-11 TDD loops). */
+    private static final Function<Instance, Machine> MACHINE =
+        MachineFactoryCompiler.compile(MODULE);
 
     private static final List<String> STDLIB = listStdlib();
 
@@ -36,6 +44,12 @@ public final class PicatRunner {
     /** files: guest path -> content, all under /work/. argv[0] = "picat". */
     public static RawResult runRaw(Map<String, String> files, List<String> argv,
                                    long timeoutMs) {
+        for (String key : files.keySet()) {
+            if (!key.startsWith("/work/")) {
+                throw new IllegalArgumentException(
+                    "file paths must be under /work/, got: " + key);
+            }
+        }
         var stdout = new ByteArrayOutputStream();
         var stderr = new ByteArrayOutputStream();
         // Chicory's WASI pathFilestatGet calls Files.readAttributes(path, "unix:*").
@@ -52,6 +66,11 @@ public final class PicatRunner {
             for (String name : STDLIB) {
                 try (var in = PicatRunner.class
                         .getResourceAsStream("/picat/lib/" + name)) {
+                    if (in == null) {
+                        throw new IllegalStateException("stdlib file missing from "
+                            + "classpath: /picat/lib/" + name
+                            + " (STDLIB list drift vs `make resources`)");
+                    }
                     Files.copy(in, libDir.resolve(name));
                 }
             }
@@ -75,7 +94,7 @@ public final class PicatRunner {
             try (var wasi = WasiPreview1.builder().withOptions(opts).build()) {
                 var store = new Store().addFunction(wasi.toHostFunctions());
                 Instance.builder(MODULE)
-                    .withMachineFactory(MachineFactoryCompiler::compile)
+                    .withMachineFactory(MACHINE)
                     .withImportValues(store.toImportValues())
                     .build(); // WASI command module: _start runs on build
             } catch (WasiExitException e) {
@@ -94,6 +113,15 @@ public final class PicatRunner {
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+    }
+
+    private static WasmModule loadModule() {
+        InputStream in = PicatRunner.class.getResourceAsStream("/picat/picat.wasm");
+        if (in == null) {
+            throw new IllegalStateException(
+                "picat.wasm not on classpath; run `make resources`");
+        }
+        return Parser.parse(in);
     }
 
     private static List<String> listStdlib() {
