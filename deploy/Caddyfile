@@ -1,0 +1,26 @@
+# Static file server for picat-cc build artifacts.
+# Railway injects $PORT; Caddy binds to it. Plain HTTP inside Railway's edge —
+# Railway terminates TLS at its proxy, so clients still get HTTPS.
+{
+	admin off
+	auto_https off
+}
+
+:{$PORT:8080} {
+	# /srv in the Docker image; override SRV_ROOT for local testing.
+	root * {$SRV_ROOT:/srv}
+	file_server browse
+
+	# itzg/docker-minecraft-server keys mods by the URL filename and needs a
+	# .jar; serving from /srv with the real filename in the path is enough.
+	# Force a sane content type just in case.
+	@jar path *.jar
+	header @jar Content-Type application/java-archive
+
+	# Cheap health/landing text at the root is provided by browse listing.
+	log {
+		output stdout
+		format console
+		level WARN
+	}
+}
