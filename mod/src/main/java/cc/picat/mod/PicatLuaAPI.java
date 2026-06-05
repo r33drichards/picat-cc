@@ -1,6 +1,7 @@
 package cc.picat.mod;
 
 import cc.picat.engine.PicatService;
+import dan200.computercraft.api.component.ComputerComponents;
 import dan200.computercraft.api.lua.IArguments;
 import dan200.computercraft.api.lua.IComputerSystem;
 import dan200.computercraft.api.lua.ILuaAPI;
@@ -56,18 +57,33 @@ import java.util.function.Supplier;
  * {@code LuaException} and {@code resume} never runs, but the engine job keeps
  * going server-side and must still release the slot when it finishes.
  *
- * <h2>fs mount resolution (option (b))</h2>
+ * <h2>fs mount resolution</h2>
  * The {@code fs} opt names a sub-directory, relative to this computer's own
  * save directory, to mount read-write at {@code /data} inside the Picat guest.
  * We derive the host path directly:
- * <pre>{@code <worldPath(ROOT)>/computercraft/computer/<id>/<fs>}</pre>
+ * <pre>{@code <worldPath(ROOT)>/computercraft/<saveFolder>/<id>/<fs>}</pre>
  * This layout is verified against CC:Tweaked 1.116.1 (ServerContext.storageDir
- * resolves {@code worldPath(ROOT)/computercraft}; computers live under the
- * {@code computer} kind / numeric id; createSaveDirMount uses the same root).
- * It couples us to that on-disk layout, which has been stable across CC
- * versions — documented as a known coupling. The alternative,
- * {@code createSaveDirMount}, yields a {@code WritableMount} not a {@code Path},
- * so it cannot feed the engine's {@code fsPath} (a {@code java.nio.file.Path}).
+ * resolves {@code worldPath(ROOT)/computercraft}; a computer's save folder is
+ * {@code ComputerFamily.getSaveFolder() + "/" + id}). {@code getSaveFolder()}
+ * returns {@code "computer"} for NORMAL and ADVANCED families and ALL turtles,
+ * but {@code "command_computer"} for the COMMAND family. We couple to that
+ * on-disk layout, which has been stable across CC versions — a documented
+ * coupling. The alternative, {@code createSaveDirMount}, yields a
+ * {@code WritableMount} not a {@code Path}, so it cannot feed the engine's
+ * {@code fsPath} (a {@code java.nio.file.Path}).
+ *
+ * <p><b>Family limitation:</b> the CC <em>api</em> jar (our compile surface)
+ * does not expose {@code ComputerFamily} nor a computer's save-folder name; it
+ * exposes neither {@code getFamily} nor a {@code Path}-yielding storage root.
+ * It DOES expose {@link IComputerSystem#getComponent} +
+ * {@link ComputerComponents#ADMIN_COMPUTER}, which CC documents as present only
+ * on "command computers, and other computers with admin capabilities" — i.e.
+ * exactly the computers whose {@code getSaveFolder()} is {@code command_computer}
+ * rather than {@code computer}. So the {@code fs} mount is supported on normal
+ * and advanced computers and on turtles, where the {@code computer} sub-folder
+ * is correct; on command computers we cannot compute the real save folder from
+ * the api surface, so rather than silently mis-mount we reject the request (see
+ * {@link #computerRoot()}).
  */
 public final class PicatLuaAPI implements ILuaAPI {
     private static final Logger LOG = LoggerFactory.getLogger("picat-cc");
@@ -178,7 +194,10 @@ public final class PicatLuaAPI implements ILuaAPI {
             Object[] event;
             if (ex != null) {
                 LOG.warn("picat job failed on computer {}", safeId(), ex);
-                event = new Object[]{token, false, "internal: " + ex.getClass().getSimpleName()};
+                // Full ex is logged above; surface the message to Lua when present,
+                // falling back to the exception type for messageless throwables.
+                event = new Object[]{token, false, "internal: "
+                    + (ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName())};
             } else if (res.ok()) {
                 Object payload = which == Result.SOLUTIONS ? res.solutions() : res.stdout();
                 event = new Object[]{token, true, payload};
@@ -232,6 +251,10 @@ public final class PicatLuaAPI implements ILuaAPI {
      * {@code List<String>}. CC delivers array tables as {@code Map<?,?>} with
      * {@code Double} keys 1.0..n; we sort by key to PRESERVE ORDER (the engine
      * pairs captured values to this list positionally).
+     *
+     * <p>Note: a sparse or non-{@code 1..n} array silently collapses to a dense
+     * list (we keep only relative key order, not the gaps), and the engine pairs
+     * positionally — so callers must pass a proper dense array of var names.
      */
     private static List<String> decodeVars(IArguments args, int index) throws LuaException {
         if (index >= args.count() || args.get(index) == null) {
@@ -308,6 +331,8 @@ public final class PicatLuaAPI implements ILuaAPI {
         if (fsObj == null) {
             return;
         }
+        // Safe cast: decodeOpts only ever puts a String under "fs" (it rejects
+        // any non-String fs value), so fsObj is guaranteed String here.
         String sub = (String) fsObj;
         if (sub.isBlank()) {
             throw new LuaException("fs: invalid path");
@@ -348,10 +373,30 @@ public final class PicatLuaAPI implements ILuaAPI {
 
     /**
      * This computer's save directory:
-     * {@code <worldPath(ROOT)>/computercraft/computer/<id>}. Returns null if the
-     * server context is somehow unavailable.
+     * {@code <worldPath(ROOT)>/computercraft/computer/<id>}.
+     *
+     * <p>The {@code computer} segment mirrors {@code ComputerFamily.getSaveFolder()},
+     * which is {@code "computer"} for NORMAL/ADVANCED computers and all turtles,
+     * but {@code "command_computer"} for the COMMAND family. The CC api jar (our
+     * compile surface) exposes neither the family nor the save-folder name, so we
+     * cannot compute that segment for a command computer. We CAN detect a command
+     * computer via the {@link ComputerComponents#ADMIN_COMPUTER} component (CC
+     * documents it as present only on command computers and other admin-capable
+     * computers), so rather than mount the wrong directory we reject the request.
+     * Keep the {@code "computer"} literal coupled to {@code getSaveFolder()}: if a
+     * future CC version changes that mapping, this resolution must change too.
+     *
+     * @return the computer's save directory, or {@code null} if the server
+     *     context is unavailable.
+     * @throws LuaException if this is a command computer (fs mount unsupported).
      */
-    private Path computerRoot() {
+    private Path computerRoot() throws LuaException {
+        // Detected via the api surface: ADMIN_COMPUTER is only present on command
+        // computers (and other admin-capable computers), whose on-disk save folder
+        // is "command_computer", not the "computer" folder we resolve below.
+        if (computer.getComponent(ComputerComponents.ADMIN_COMPUTER) != null) {
+            throw new LuaException("fs: not supported on command computers");
+        }
         try {
             Path world = computer.getLevel().getServer().getWorldPath(LevelResource.ROOT);
             return world.resolve("computercraft").resolve("computer")
