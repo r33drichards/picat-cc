@@ -1831,6 +1831,10 @@ int b_OPEN_ccf(BPLONG fop, BPLONG sop, BPLONG Index)
 
 /* this function is by Steve Branch */
 int get_socket_fd(int index) {
+#ifdef PICAT_WASM
+    /* PICAT_WASM: no sockets in WASI; FILE has no _fileno field in musl */
+    return 0;
+#else
 #ifdef WIN32
     printf("get_socket_fd not supported for non-Linux platforms\n");
     return 0;
@@ -1851,6 +1855,7 @@ int get_socket_fd(int index) {
 #endif
 #endif
 #endif
+#endif /* PICAT_WASM */
 }
 
 /* this function is by Steve Branch */

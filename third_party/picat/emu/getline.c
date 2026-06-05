@@ -148,9 +148,13 @@ static void search_forw();  /* look forw for current string */
 
 #ifdef __unix__
 #include <unistd.h>
-#ifdef POSIX  /* use POSIX interface */
+#if defined(POSIX) && !defined(PICAT_WASM)  /* use POSIX interface */
 #include <termios.h>
 struct termios new_termios, old_termios;
+#elif defined(PICAT_WASM)
+/* PICAT_WASM: WASI has no termios. Keep the read()-based gl_getc path
+   below; only the terminal echo/raw-mode setup (gl_char_init/cleanup) is
+   stubbed out. Batch mode does not use interactive line editing. */
 #else  /* not POSIX */
 #include <sys/ioctl.h>
 #ifdef M_XENIX  /* does not really use bsd terminal interface */
@@ -182,7 +186,8 @@ struct dsc$descriptor_s descrip;  /* VMS descriptor */
 static void
 gl_char_init()  /* turn off input echo */
 {
-#ifdef __unix__
+/* PICAT_WASM: no termios/ioctl in WASI; leave the terminal mode untouched */
+#if defined(__unix__) && !defined(PICAT_WASM)
 #ifdef POSIX
     tcgetattr(0, &old_termios);
     gl_intrc = old_termios.c_cc[VINTR];
@@ -243,7 +248,8 @@ gl_char_init()  /* turn off input echo */
 static void
 gl_char_cleanup()  /* undo effects of gl_char_init */
 {
-#ifdef __unix__
+/* PICAT_WASM: no termios/ioctl in WASI; nothing to restore */
+#if defined(__unix__) && !defined(PICAT_WASM)
 #ifdef POSIX
     tcsetattr(0, TCSANOW, &old_termios);
 #else  /* not POSIX */

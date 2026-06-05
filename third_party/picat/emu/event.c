@@ -10,6 +10,11 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#elif defined(PICAT_WASM)
+/* PICAT_WASM: no pthreads in WASI; the GUI/timer event subsystem is dead
+   code for the batch engine. Provide unistd only (for usleep stub). */
+#include <unistd.h>
+#include <sys/types.h>
 #else
 #include <unistd.h>
 #include <sys/types.h>
@@ -41,6 +46,11 @@ static BPLONG bpp_java_obj = MAKEINT(0);
 CRITICAL_SECTION csCriticalSection;
 #define ENTER_CRITICAL_SECTION EnterCriticalSection(&csCriticalSection);
 #define LEAVE_CRITICAL_SECTION LeaveCriticalSection(&csCriticalSection);
+#elif defined(PICAT_WASM)
+/* PICAT_WASM: single-threaded; critical sections are no-ops */
+#define bp_sleep(interval) usleep((interval)*1000)
+#define ENTER_CRITICAL_SECTION
+#define LEAVE_CRITICAL_SECTION
 #else
 pthread_mutex_t csCriticalSection;
 #define bp_sleep(interval) usleep(interval*1000)
@@ -188,6 +198,8 @@ void cg_initialize() {
     */
 #ifdef _WIN32
     InitializeCriticalSection(&csCriticalSection);
+#elif defined(PICAT_WASM)
+    /* PICAT_WASM: no mutex needed (single-threaded) */
 #else
     pthread_mutex_init(&csCriticalSection, NULL);
 #endif
@@ -563,6 +575,8 @@ DWORD WINAPI timerThread(LPVOID timer_no) {
                 LEAVE_CRITICAL_SECTION;
 #ifdef _WIN32
                 ExitThread(0);
+#elif defined(PICAT_WASM)
+                return 0; /* PICAT_WASM: no threads; timerThread is unreachable */
 #else
                 pthread_exit(0);
 #endif
@@ -599,6 +613,8 @@ DWORD WINAPI timerThread(LPVOID timer_no) {
             if (status == TIMER_STATUS_DEAD) {
 #ifdef _WIN32
                 ExitThread(0);
+#elif defined(PICAT_WASM)
+                return 0; /* PICAT_WASM: no threads */
 #else
                 pthread_exit(0);
 #endif
@@ -615,6 +631,8 @@ DWORD WINAPI timerThread(LPVOID timer_no) {
 #ifdef _WIN32
         BPLONG pid;
         HANDLE threadHandle;
+#elif defined(PICAT_WASM)
+        BPLONG pid = 0; /* PICAT_WASM: no threads */
 #else
         pthread_t pid;
 #endif
@@ -632,6 +650,11 @@ DWORD WINAPI timerThread(LPVOID timer_no) {
             quit("Failed to create a timer\n");
         }
         pid = wpid;
+#elif defined(PICAT_WASM)
+        /* PICAT_WASM: no background timer thread; timers are unsupported.
+           timerThread stays defined but is never spawned. */
+        (void)timer_no_ptr;
+        quit("timers are not supported in the WASM build\n");
 #else
         if (pthread_create( &pid, NULL, timerThread, (void*)timer_no_ptr) != 0) {
             quit("Failed to create a timer\n");

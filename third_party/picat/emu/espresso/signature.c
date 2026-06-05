@@ -23,7 +23,8 @@ signature(pset_family F1, pset_family D1, pset_family R1)
 	pcover ESC,ESSet,ESSENTIAL;
 	pcover F,D,R;
 	pcube last,p;
-#if (defined(WIN32) && defined(__MINGW32__))
+/* PICAT_WASM: WASI has no sigaction/SIGXCPU; skip the CPU-limit handler */
+#if (defined(WIN32) && defined(__MINGW32__)) || defined(PICAT_WASM)
         #define sigemptyset(x) memset((x), 0, sizeof(*(x)))
 	//struct signal xcpu_action;
 #else
@@ -39,7 +40,7 @@ signature(pset_family F1, pset_family D1, pset_family R1)
 	R = unravel(R, cube.num_binary_vars);
 	R = sf_contain(R);
 
-#if !(defined(WIN32) && defined(__MINGW32__))
+#if !((defined(WIN32) && defined(__MINGW32__)) || defined(PICAT_WASM))
 	xcpu_action.sa_handler = (void (*)()) cleanup;
 	sigemptyset (&xcpu_action.sa_mask);
 	xcpu_action.sa_flags = 0;
