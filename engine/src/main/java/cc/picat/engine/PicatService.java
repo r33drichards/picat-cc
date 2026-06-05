@@ -149,7 +149,9 @@ public final class PicatService {
      * @param vars goal variable names to capture per solution
      * @param opts optional knobs: {@code timeout} (Number, seconds),
      *             {@code max} (Number, solution cap), {@code bind}
-     *             (Map&lt;String,Object&gt; var-name -&gt; value)
+     *             (Map&lt;String,Object&gt; var-name -&gt; value), {@code fsPath}
+     *             (a {@link java.nio.file.Path} mounted read-write at
+     *             {@code /data} in the guest; see {@link #fsPathOpt})
      */
     public CompletableFuture<Result> query(String prog, String goal,
             List<String> vars, Map<String, Object> opts) {
@@ -168,26 +170,41 @@ public final class PicatService {
         Map<String, String> files = Map.of(
             "/work/user.pi", prog == null ? "" : prog,
             "/work/request.pi", request);
-        return submit(files, PicatService::interpretQuery, timeoutMs);
+        return submit(files, PicatService::interpretQuery, timeoutMs,
+            fsPathOpt(opts));
     }
 
     /**
      * Run a self-contained program for its stdout (a {@code main}-style driver).
      * Wraps {@code prog} with a driver predicate so output is captured exactly.
      *
-     * <p>Always runs with the default (capped) timeout — there is no opts map,
-     * so no per-call timeout, max, or bind. Use {@link #query} when you need
-     * those.
-     *
      * <p><b>Completion thread:</b> same contract as {@link #query} — the future
      * may complete on an internal worker or the timeout-scheduler thread; keep
      * continuation bodies cheap or use the {@code *Async} variants.
+     *
+     * <p>The 2-arg form runs with the default (capped) timeout and no
+     * {@code /data} mount; use {@link #eval(String, String, Map)} for those.
      *
      * @param prog user Picat source defining the entry point
      * @param goal entry goal text (without trailing '.'); null/blank ⇒ "main"
      */
     public CompletableFuture<Result> eval(String prog, String goal) {
-        long timeoutMs = resolveTimeout(Map.of());
+        return eval(prog, goal, Map.of());
+    }
+
+    /**
+     * As {@link #eval(String, String)} but honors {@code opts}: {@code timeout}
+     * (Number, seconds) and {@code fsPath} (a {@link java.nio.file.Path} mounted
+     * read-write at {@code /data}; see {@link #fsPathOpt}). {@code max} and
+     * {@code bind} are ignored — eval is single-solution and var-free by design.
+     *
+     * @param prog user Picat source defining the entry point
+     * @param goal entry goal text (without trailing '.'); null/blank ⇒ "main"
+     * @param opts optional knobs: {@code timeout}, {@code fsPath}
+     */
+    public CompletableFuture<Result> eval(String prog, String goal,
+            Map<String, Object> opts) {
+        long timeoutMs = resolveTimeout(opts);
         String entry = (goal == null || goal.isBlank()) ? "main" : goal;
         // Drive through a fixed predicate so the captured goal is var-free and
         // single-solution; user output goes to stdout, which runRaw captures.
@@ -202,7 +219,8 @@ public final class PicatService {
         Map<String, String> files = Map.of(
             "/work/user.pi", driverProg,
             "/work/request.pi", request);
-        return submit(files, PicatService::interpretEval, timeoutMs);
+        return submit(files, PicatService::interpretEval, timeoutMs,
+            fsPathOpt(opts));
     }
 
     // --- core submit + timeout-by-abandonment ------------------------------
@@ -213,7 +231,7 @@ public final class PicatService {
     }
 
     private CompletableFuture<Result> submit(Map<String, String> files,
-            Interpreter interp, long timeoutMs) {
+            Interpreter interp, long timeoutMs, java.nio.file.Path dataDir) {
         // Saturation guard: reject without enqueuing.
         if (abandoned.get() >= maxAbandoned) {
             return CompletableFuture.completedFuture(
@@ -235,7 +253,7 @@ public final class PicatService {
         CompletableFuture<Result> worker = CompletableFuture.supplyAsync(() -> {
             try {
                 PicatRunner.RawResult raw = PicatRunner.runRaw(files,
-                    List.of("picat", "/work/shim.pi"), timeoutMs);
+                    List.of("picat", "/work/shim.pi"), timeoutMs, dataDir);
                 return interp.apply(raw);
             } catch (RuntimeException e) {
                 return Result.err(mapRuntime(e));
@@ -303,6 +321,17 @@ public final class PicatService {
             return (Map<String, Object>) m;
         }
         return Map.of();
+    }
+
+    /** The {@code fsPath} opt: a real {@link java.nio.file.Path} to mount at
+     *  {@code /data} (read-write) in the guest, or null for the isolated
+     *  default (no {@code /data}). This is set by the <em>mod layer</em> after
+     *  it has resolved and validated the CC-sandbox path the Lua caller named
+     *  ({@code opts.fs}); it is NEVER a raw value from Lua. Any non-Path value
+     *  is ignored (treated as no mount). */
+    private static java.nio.file.Path fsPathOpt(Map<String, Object> opts) {
+        Object p = opts == null ? null : opts.get("fsPath");
+        return p instanceof java.nio.file.Path path ? path : null;
     }
 
     // --- request.pi generation ---------------------------------------------

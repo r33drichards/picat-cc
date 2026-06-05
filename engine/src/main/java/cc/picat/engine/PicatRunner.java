@@ -44,6 +44,28 @@ public final class PicatRunner {
     /** files: guest path -> content, all under /work/. argv[0] = "picat". */
     public static RawResult runRaw(Map<String, String> files, List<String> argv,
                                    long timeoutMs) {
+        return runRaw(files, argv, timeoutMs, null);
+    }
+
+    /**
+     * As {@link #runRaw(Map, List, long)} but, when {@code dataDir} is non-null,
+     * mounts that <em>real</em> host {@link Path} read-write at {@code /data} in
+     * the guest so a goal can persist files (nn models, etc.) that outlive the
+     * fresh WASM instance.
+     *
+     * <p><b>Security:</b> {@code dataDir} is mounted <em>as-is</em>. The engine
+     * layer trusts its caller; path validation (rejecting absolute/{@code ..}
+     * escapes, confining to the computer's own CC save dir) is the mod layer's
+     * responsibility — see the "fs option" security invariants in
+     * {@code docs/plans/2026-06-04-picat-cc-ffi-design.md}. The {@code dataDir}
+     * may live on a different {@link FileSystem} provider than the jimfs
+     * {@code /work} and {@code /picat} mounts; Chicory's WASI layer resolves
+     * each guest path against its own mounted {@link Path}, so the providers do
+     * not mix (a {@code /data/...} guest path stays on {@code dataDir}'s
+     * provider).
+     */
+    public static RawResult runRaw(Map<String, String> files, List<String> argv,
+                                   long timeoutMs, Path dataDir) {
         for (String key : files.keySet()) {
             if (!key.startsWith("/work/")) {
                 throw new IllegalArgumentException(
@@ -86,15 +108,21 @@ public final class PicatRunner {
                 Files.copy(in, workDir.resolve("shim.pi"), StandardCopyOption.REPLACE_EXISTING);
             }
 
-            WasiOptions opts = WasiOptions.builder()
+            WasiOptions.Builder optsBuilder = WasiOptions.builder()
                 .withStdout(stdout)
                 .withStderr(stderr)
                 .withStdin(new ByteArrayInputStream(new byte[0]))
                 .withArguments(argv)
                 .withEnvironment("PICATPATH", "/picat/lib")
                 .withDirectory("/picat", picatDir)
-                .withDirectory("/work", workDir)
-                .build();
+                .withDirectory("/work", workDir);
+            if (dataDir != null) {
+                // Real host path mounted at /data. Distinct FileSystem provider
+                // from the jimfs mounts above is fine: WASI resolves /data/...
+                // against this Path only.
+                optsBuilder.withDirectory("/data", dataDir);
+            }
+            WasiOptions opts = optsBuilder.build();
 
             int exit = 0;
             try (var wasi = WasiPreview1.builder().withOptions(opts).build()) {
