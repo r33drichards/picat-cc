@@ -64,14 +64,23 @@ EXT = .wasm
 
 include common.mak
 
-# espresso and kissat carry their own -O3 flag sets in common.mak. They
-# DO NOT include $(SJLJ)/$(DEFS), but neither espresso nor kissat use
-# setjmp/longjmp (confirmed: setjmp is only in toam.c), so they need no
-# SjLj lowering. We do, however, need -DPICAT_WASM and the WASI emulation
-# defines to reach kissat (resources.c uses getrusage/times) and espresso
-# (cpu_time.c uses times()). These overrides come AFTER the include so they
-# win over common.mak's own assignments.
+# espresso and kissat carry their own -O3 flag sets in common.mak. The
+# REAL purpose of overriding them here is the -O3 -> -O2 downgrade (kept
+# consistent with the main objects' CFLAGS).
+#
+# Note on -DPICAT_WASM/$(DEFS) reaching these subtrees: it already does,
+# regardless of this override. common.mak's espresso/kissat rules invoke
+# $(CCC) $(ESPRESSO_FLAGS) (resp. $(KISSAT_FLAGS)), and $(CCC) already
+# expands to `$(CC) -c $(CFLAGS)` which embeds $(DEFS) -- verified with
+# `make -n`. So appending $(DEFS) below is belt-and-suspenders (DEFS is
+# actually passed twice); it documents intent and is harmless. These
+# overrides come AFTER the include so they win over common.mak's own
+# assignments.
 ESPRESSO_FLAGS = -O2 -I. -Iespresso $(DEFS)
 KISSAT_FLAGS = -O2 -W -Wall -DNEMBEDDED -DNDEBUG -DNMETRICS -DQUIET \
                -DNSTATISTICS -DNPROOFS $(DEFS) \
                -Wno-implicit-function-declaration
+
+# Incremental rebuilds must track flag changes: editing either makefile
+# invalidates every object so stale .o files are never silently reused.
+$(OBJ) $(ESPRESSO_OBJ) $(KISSAT_OBJ): Makefile.wasm common.mak
