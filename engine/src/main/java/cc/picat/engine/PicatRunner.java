@@ -79,6 +79,12 @@ public final class PicatRunner {
             for (var e : files.entrySet()) {
                 Files.writeString(fs.getPath(e.getKey()), e.getValue(), StandardCharsets.UTF_8);
             }
+            // The FFI harness ships in the jar; copy it alongside the caller's
+            // files so `picat /work/shim.pi` finds it (Task 8).
+            try (var in = PicatRunner.class.getResourceAsStream("/picat/shim.pi")) {
+                if (in == null) throw new IllegalStateException("shim.pi missing from resources");
+                Files.copy(in, workDir.resolve("shim.pi"), StandardCopyOption.REPLACE_EXISTING);
+            }
 
             WasiOptions opts = WasiOptions.builder()
                 .withStdout(stdout)
