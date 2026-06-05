@@ -1,0 +1,6 @@
+*.o
+*.wasm
+.gradle/
+build/
+result
+.DS_Store
