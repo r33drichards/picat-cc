@@ -10,7 +10,42 @@ class PicatLiteralsTest {
     @Test void floats()        { assertEquals("3.5", PicatLiterals.toLiteral(3.5)); }
     @Test void atoms()         { assertEquals("'kelp'", PicatLiterals.toLiteral("kelp")); }
     @Test void atomEscaping()  { assertEquals("'it''s'", PicatLiterals.toLiteral("it's")); }
+    @Test void atomBackslashEscaping() {
+        // Picat treats \ as an escape introducer inside quoted atoms; a trailing
+        // backslash would otherwise escape the closing quote and run the lexer
+        // past the atom (code injection). Backslash must be doubled.
+        assertEquals("'foo\\\\'", PicatLiterals.toLiteral("foo\\"));
+    }
+    @Test void atomBackslashN() {
+        // "a\nb" (backslash, letter n) must not collapse to a newline-bearing atom.
+        assertEquals("'a\\\\nb'", PicatLiterals.toLiteral("a\\nb"));
+    }
+    @Test void atomMixedQuoteAndBackslash() {
+        assertEquals("'a''b\\\\c'", PicatLiterals.toLiteral("a'b\\c"));
+    }
+    @Test void atomControlChars() {
+        // Raw control chars escaped via Picat's \n \r \t escape sequences.
+        assertEquals("'a\\nb'", PicatLiterals.toLiteral("a\nb"));
+        assertEquals("'a\\rb'", PicatLiterals.toLiteral("a\rb"));
+        assertEquals("'a\\tb'", PicatLiterals.toLiteral("a\tb"));
+    }
     @Test void booleans()      { assertEquals("true", PicatLiterals.toLiteral(true)); }
+    @Test void scientificNotation() {
+        // Picat's tokenizer accepts uppercase-E float syntax (token.c:1247
+        // `(d | 32) == 'e'`), so Double.toString's "1.0E21" lexes fine.
+        assertEquals("1.0E21", PicatLiterals.toLiteral(1e21));
+    }
+    @Test void rejectsNonFiniteNumbers() {
+        // NaN/Infinity render via Double.toString as "NaN"/"Infinity", which
+        // Picat lexes as unbound variables (uppercase start) — silent meaning
+        // change, so reject them.
+        assertThrows(IllegalArgumentException.class,
+            () -> PicatLiterals.toLiteral(Double.NaN));
+        assertThrows(IllegalArgumentException.class,
+            () -> PicatLiterals.toLiteral(Double.POSITIVE_INFINITY));
+        assertThrows(IllegalArgumentException.class,
+            () -> PicatLiterals.toLiteral(Double.NEGATIVE_INFINITY));
+    }
     @Test void lists() {
         assertEquals("[1,2,3]", PicatLiterals.toLiteral(List.of(1.0, 2.0, 3.0)));
     }

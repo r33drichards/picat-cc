@@ -49,9 +49,16 @@ public final class PicatLiterals {
 
     private static void writeNumber(StringBuilder sb, Number n) {
         double d = n.doubleValue();
-        if (d == Math.rint(d) && Double.isFinite(d) && Math.abs(d) <= MAX_EXACT_INT) {
+        if (!Double.isFinite(d)) {
+            // NaN/Infinity stringify as "NaN"/"Infinity", which Picat would lex
+            // as unbound variables (uppercase start) — silent meaning change.
+            throw new IllegalArgumentException("bind: non-finite number: " + d);
+        }
+        if (d == Math.rint(d) && Math.abs(d) <= MAX_EXACT_INT) {
             sb.append((long) d);
         } else {
+            // Double.toString emits an uppercase 'E' exponent, which Picat's
+            // tokenizer accepts (token.c:1247 `(d | 32) == 'e'`).
             sb.append(Double.toString(d));
         }
     }
@@ -60,7 +67,17 @@ public final class PicatLiterals {
         sb.append('\'');
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);
-            if (c == '\'') sb.append("''"); else sb.append(c);
+            switch (c) {
+                // Picat's tokenizer reads doubled quotes as a single quote and
+                // treats \ as an escape introducer, so both must be escaped or
+                // the lexer runs past the atom (code injection / corruption).
+                case '\'' -> sb.append("''");
+                case '\\' -> sb.append("\\\\");
+                case '\n' -> sb.append("\\n");
+                case '\r' -> sb.append("\\r");
+                case '\t' -> sb.append("\\t");
+                default -> sb.append(c);
+            }
         }
         sb.append('\'');
     }
