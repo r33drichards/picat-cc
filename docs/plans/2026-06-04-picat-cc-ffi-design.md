@@ -144,7 +144,8 @@ table→**list** (not tuple — goals expecting arrays use `to_array/1`; documen
 rule), `{f=..., args=...}`→struct.
 
 Deliberate lossiness, documented: char lists serialize as strings; tuples and
-lists both flatten to arrays. Round-tripping is not bit-exact.
+lists both flatten to arrays; integers outside ±2^53 lose precision (JSON
+number → Lua double). Round-tripping is not bit-exact.
 
 ## Shim and WASM↔Java contract
 

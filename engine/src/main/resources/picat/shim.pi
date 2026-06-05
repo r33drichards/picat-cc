@@ -17,6 +17,8 @@
  * A user.pi compile error makes cl/1 raise error(syntax_error,picat) (probed:
  * cl prints "N error(s)" then throws), which the top-level catch turns into a
  * {"status":"error",...}. An "ok" response can never follow a bad load.
+ * A throw DURING backtracking discards solutions already collected and reports
+ * status:error — collection is all-or-nothing, not partial.
  *
  * --- How the goal is run (KEY design decision) ---------------------------
  * parse_term/3 + call/1 alone is NOT enough: a goal like "Y = double(21)" is
@@ -42,6 +44,8 @@
  *    its own clause ahead of all three or it serializes as "" instead of [].
  *  - a tuple {a,b,c} is a struct named '{}', also array/1 but NOT list/1;
  *    handled as an array via the '{}'-named struct clause.
+ *  - non-ASCII atoms are rejected by parse_term under WASI (probed: 'café'/δ
+ *    => syntax_error); goals and atoms must be ASCII.
  */
 import util.
 import request.
@@ -81,6 +85,10 @@ run_request() =>
 
 % Emit and load '$shim_goal'(<goal vars>, _Dummy) => <goal>. so Picat's
 % compiler evaluates functions in the goal body. _Dummy guarantees arity >= 1.
+% Splicing goal_str() verbatim is not an injection vector: parse_term above
+% already validated it as a single well-formed term, and any extra clauses an
+% attacker could smuggle would have a different name/arity than '$shim_goal'
+% and so are never called (we only ever call new_struct('$shim_goal', ...)).
 compile_goal(Names) =>
     Params = join([to_string(N) : N in Names] ++ ["_Dummy"], ","),
     Src = "'$shim_goal'(" ++ Params ++ ") => " ++ goal_str() ++ ".\n",
@@ -99,10 +107,11 @@ bind_all([(Name, Value) | Rest], NameArgs) =>
     bind_all(Rest, NameArgs).
 
 lookup_arg(Name, NameArgs) = Var =>
-    member({N, V}, NameArgs),
-    N == Name,
-    !,
-    Var = V.
+    ( member({N, V}, NameArgs), N == Name ->
+        Var = V
+    ;
+        throw $var_not_in_goal(Name)
+    ).
 
 % One solution as a JSON object {"V1":...,"V2":...} over the requested names.
 sol_json(ReqNames, NameArgs) = "{" ++ join(Pairs, ",") ++ "}" =>
