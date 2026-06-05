@@ -14,12 +14,13 @@ can pull the mod by direct URL in its `MODS=` list.
 
 ## Using it from a Minecraft server
 
-After deploy, Railway gives the service a domain, e.g.
-`https://picat-cc-cdn.up.railway.app`. The jar is then at:
+The deployed service (Railway project `picat-cc-cdn`) is live at:
 
 ```
-https://picat-cc-cdn.up.railway.app/picat-cc-0.1.0.jar
+https://picat-cc-cdn-production.up.railway.app/picat-cc-0.1.0.jar
 ```
+
+(Browse index of all hosted jars: <https://picat-cc-cdn-production.up.railway.app/>.)
 
 Add that URL to `MODS` (newline- or comma-separated). It must sit alongside its
 dependencies, which are already in the example server config:
