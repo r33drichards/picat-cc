@@ -137,7 +137,7 @@ Outbound (Picat → JSON → Lua):
 | string / char list | string | string |
 | list, tuple `{...}` | array | array table |
 | struct `mine(A,B)` | `{"f":"mine","args":[A,B]}` | `{f="mine", args={...}}` |
-| unbound var | `{"var":"_G123"}` | `{var="_G123"}` |
+| unbound var | `{"var":"_"}` | `{var="_"}` (gensym names would be non-deterministic) |
 
 Inbound (`bind`, the reverse): number→int/float, string→atom, array
 table→**list** (not tuple — goals expecting arrays use `to_array/1`; documented
