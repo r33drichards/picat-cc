@@ -11,7 +11,7 @@ plugins {
 // Version is consumed by Loom when it auto-generates the nested-jar
 // fabric.mod.json for this (non-mod) library; it must be valid semver or
 // `:mod:processIncludeJars` warns "(unspecified) is not valid semver".
-version = '0.1.0'
+version = '0.1.1'
 
 java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }
 

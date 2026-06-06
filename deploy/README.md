@@ -17,10 +17,15 @@ can pull the mod by direct URL in its `MODS=` list.
 The deployed service (Railway project `picat-cc-cdn`) is live at:
 
 ```
-https://picat-cc-cdn-production.up.railway.app/picat-cc-0.1.0.jar
+https://picat-cc-cdn-production.up.railway.app/picat-cc-0.1.1.jar
 ```
 
 (Browse index of all hosted jars: <https://picat-cc-cdn-production.up.railway.app/>.)
+
+> **0.1.0 was withdrawn** — it bundled `org.objectweb.asm` unrelocated, which
+> caused a `LinkageError` (loader-constraint violation) crashing any server that
+> also runs Mixin/MixinExtras-based mods (e.g. Axiom). 0.1.1 relocates ASM into
+> `cc.picat.shadow.asm`. Use the 0.1.1 URL; the 0.1.0 jar is no longer hosted.
 
 Add that URL to `MODS` (newline- or comma-separated). It must sit alongside its
 dependencies, which are already in the example server config:
