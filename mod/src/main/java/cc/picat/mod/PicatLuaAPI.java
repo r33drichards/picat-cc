@@ -23,6 +23,7 @@ import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
@@ -92,8 +93,10 @@ public final class PicatLuaAPI implements ILuaAPI {
     private final IComputerSystem computer;
     private final Supplier<PicatService> serviceSupplier;
 
-    /** One job per computer. */
-    private final AtomicBoolean inFlight = new AtomicBoolean(false);
+    /** Number of jobs currently in flight on this computer (cap is configurable
+     *  via {@code maxJobsPerComputer}), so one slow/stuck job cannot block all
+     *  further queries from the same computer. */
+    private final AtomicInteger inFlight = new AtomicInteger(0);
     /** Distinguishes this computer's picat_done events from any other source. */
     private final AtomicLong nextToken = new AtomicLong(0);
 
@@ -140,9 +143,10 @@ public final class PicatLuaAPI implements ILuaAPI {
         } catch (LuaException fsErr) {
             return MethodResult.of(false, fsErr.getMessage());
         }
-        if (!inFlight.compareAndSet(false, true)) {
+        if (inFlight.incrementAndGet() > svc.maxJobsPerComputer()) {
+            inFlight.decrementAndGet();
             return MethodResult.of(false,
-                "busy: a picat job is already running on this computer");
+                "busy: too many picat jobs already running on this computer");
         }
         return dispatch(svc.query(prog, goal, vars, opts), Result.SOLUTIONS);
     }
@@ -169,9 +173,10 @@ public final class PicatLuaAPI implements ILuaAPI {
         } catch (LuaException fsErr) {
             return MethodResult.of(false, fsErr.getMessage());
         }
-        if (!inFlight.compareAndSet(false, true)) {
+        if (inFlight.incrementAndGet() > svc.maxJobsPerComputer()) {
+            inFlight.decrementAndGet();
             return MethodResult.of(false,
-                "busy: a picat job is already running on this computer");
+                "busy: too many picat jobs already running on this computer");
         }
         return dispatch(svc.eval(prog, goal, opts), Result.STDOUT);
     }
@@ -190,7 +195,7 @@ public final class PicatLuaAPI implements ILuaAPI {
             // Cheap body only — may run on an engine worker or the timeout
             // scheduler thread. Release the slot FIRST so a terminated coroutine
             // (which never resumes) still frees the computer.
-            inFlight.set(false);
+            inFlight.decrementAndGet();
             Object[] event;
             if (ex != null) {
                 LOG.warn("picat job failed on computer {}", safeId(), ex);

@@ -27,11 +27,13 @@ public final class PicatCcConfig {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
     /** Worker pool size in the engine (concurrent in-flight goals, process-wide). */
-    public int workerThreads = 2;
+    public int workerThreads = 6;
     /** Reject new work once this many timed-out zombie jobs are still outstanding. */
-    public int maxAbandonedJobs = 4;
+    public int maxAbandonedJobs = 32;
     /** Hard cap (seconds) on any single job's requested timeout. */
     public int maxTimeoutSeconds = 300;
+    /** How many Picat jobs a single computer may have in flight at once. */
+    public int maxJobsPerComputer = 8;
 
     public static PicatCcConfig load() {
         Path path = FabricLoader.getInstance().getConfigDir().resolve("picat-cc.json");
@@ -66,6 +68,14 @@ public final class PicatCcConfig {
         if (workerThreads < 1) workerThreads = 1;
         if (maxAbandonedJobs < 0) maxAbandonedJobs = 0;
         if (maxTimeoutSeconds < 1) maxTimeoutSeconds = 1;
+        // Robustness floors: a timed-out solve becomes a zombie holding a worker
+        // thread until it dies, and once `maxAbandonedJobs` zombies pile up the
+        // engine rejects all new work ("busy: saturated") until restart. Enforce
+        // headroom even on an older hand-written/persisted config so a handful of
+        // stray timeouts cannot wedge the engine.
+        if (workerThreads < 4) workerThreads = 4;
+        if (maxAbandonedJobs < 16) maxAbandonedJobs = 16;
+        if (maxJobsPerComputer < 2) maxJobsPerComputer = 2;
         return this;
     }
 }

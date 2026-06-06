@@ -92,17 +92,31 @@ public final class PicatService {
     private final ScheduledThreadPoolExecutor timer;
     private final int maxAbandoned;
     private final long maxTimeoutMs;
+    private final int maxJobsPerComputer;
     private final AtomicInteger abandoned = new AtomicInteger(0);
 
-    /**
-     * @param threads      worker pool size (concurrent in-flight goals)
-     * @param maxAbandoned reject new work once this many timed-out zombies are
-     *                     still outstanding
-     * @param maxTimeoutMs hard cap on any single job's timeout, in millis
-     */
+    /** How many jobs a single computer may have in flight at once. */
+    public int maxJobsPerComputer() {
+        return maxJobsPerComputer;
+    }
+
+    /** Back-compat constructor: defaults {@code maxJobsPerComputer} to 8. */
     public PicatService(int threads, int maxAbandoned, long maxTimeoutMs) {
+        this(threads, maxAbandoned, maxTimeoutMs, 8);
+    }
+
+    /**
+     * @param threads            worker pool size (concurrent in-flight goals)
+     * @param maxAbandoned       reject new work once this many timed-out zombies
+     *                           are still outstanding
+     * @param maxTimeoutMs       hard cap on any single job's timeout, in millis
+     * @param maxJobsPerComputer how many jobs one computer may run concurrently
+     */
+    public PicatService(int threads, int maxAbandoned, long maxTimeoutMs,
+            int maxJobsPerComputer) {
         this.maxAbandoned = maxAbandoned;
         this.maxTimeoutMs = maxTimeoutMs;
+        this.maxJobsPerComputer = maxJobsPerComputer;
         ThreadFactory workerFactory = new ThreadFactory() {
             private final AtomicInteger n = new AtomicInteger(0);
             @Override public Thread newThread(Runnable r) {

@@ -52,9 +52,9 @@ public final class PicatApiRegistration {
         ServerLifecycleEvents.SERVER_STARTING.register(server -> {
             PicatCcConfig cfg = PicatCcConfig.load();
             service = new PicatService(cfg.workerThreads, cfg.maxAbandonedJobs,
-                cfg.maxTimeoutSeconds * 1000L);
-            LOG.info("Picat engine started (threads={}, maxAbandoned={}, maxTimeout={}s)",
-                cfg.workerThreads, cfg.maxAbandonedJobs, cfg.maxTimeoutSeconds);
+                cfg.maxTimeoutSeconds * 1000L, cfg.maxJobsPerComputer);
+            LOG.info("Picat engine started (threads={}, maxAbandoned={}, maxTimeout={}s, maxJobsPerComputer={})",
+                cfg.workerThreads, cfg.maxAbandonedJobs, cfg.maxTimeoutSeconds, cfg.maxJobsPerComputer);
         });
 
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
